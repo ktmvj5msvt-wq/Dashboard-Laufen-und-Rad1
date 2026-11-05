@@ -1,0 +1,3 @@
+training.example.com {
+	reverse_proxy dashboard:8000
+}

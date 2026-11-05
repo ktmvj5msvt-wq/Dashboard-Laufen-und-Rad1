@@ -1,7 +1,7 @@
 # Caddy holt und erneuert das Let's-Encrypt-Zertifikat von selbst.
 # Voraussetzung: DOMAIN zeigt per A-Record auf diesen Server, Port 80 und 443 offen.
 
-{$DOMAIN} {
+{$DOMAIN:energietechnik-suhr.store} {
 	encode zstd gzip
 
 	# MCP-Streams laufen lange. Ohne diese Timeouts bricht Caddy sie ab.

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trainingsdashboard</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231f5fd6'/%3E%3Cpath d='M5 22l7-9 5 6 4-5 6 8' fill='none' stroke='white' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <h1>Trainingsdashboard</h1>
+      <span class="pill" id="racepill">…</span>
+      <span class="spacer"></span>
+      <span class="syncinfo" id="syncinfo"></span>
+      <button id="syncbtn" class="primary" type="button">Jetzt synchronisieren</button>
+    </header>
+    <div id="banners"></div>
+    <nav class="tabs" role="tablist" aria-label="Bereiche">
+      <button class="tab" role="tab" id="t-health" data-tab="health" aria-selected="true" aria-controls="tab-health">Gesundheit</button>
+      <button class="tab" role="tab" id="t-plan" data-tab="plan" aria-selected="false" aria-controls="tab-plan">Trainingsplan</button>
+      <button class="tab" role="tab" id="t-forecast" data-tab="forecast" aria-selected="false" aria-controls="tab-forecast">Prognose &amp; Z2-Verlauf</button>
+    </nav>
+
+    <section id="tab-health" role="tabpanel" aria-labelledby="t-health"></section>
+    <section id="tab-plan" role="tabpanel" aria-labelledby="t-plan" hidden></section>
+    <section id="tab-forecast" role="tabpanel" aria-labelledby="t-forecast" hidden></section>
+
+    <details class="conn" id="conn"></details>
+  </div>
+  <div class="tip" id="tip" role="tooltip"></div>
+  <script src="/static/charts.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

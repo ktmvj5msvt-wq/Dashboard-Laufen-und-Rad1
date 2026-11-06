@@ -37,7 +37,6 @@
     const rel = (ts) => (ts ? new Date(ts).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : 'nie');
     $('#syncinfo').textContent = `Strava: ${rel(st.strava.last_ok)} · Garmin: ${rel(st.garmin.last_ok)}`;
     const b = [];
-    if (st.demo) b.push(['warn', '<b>Demodaten:</b> Alle Werte sind synthetisch und dienen nur zum Ausprobieren der Oberfläche.']);
     if (!st.strava.connected) {
       b.push(['', st.strava.configured ? 'Strava ist noch nicht verbunden. <a href="/auth/strava">Jetzt mit Strava verbinden</a>.'
         : 'Strava ist noch nicht eingerichtet: <code>STRAVA_CLIENT_ID</code> und <code>STRAVA_CLIENT_SECRET</code> setzen (siehe README).']);

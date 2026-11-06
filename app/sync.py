@@ -62,5 +62,4 @@ def status() -> dict:
                                   "AND sport IN ('run','ride') AND streams_done=0 AND has_hr=1")["n"],
         "health_days": db.one("SELECT COUNT(*) AS n FROM health_daily")["n"],
     }
-    out["demo"] = bool(db.get_kv("demo", False))
     return out

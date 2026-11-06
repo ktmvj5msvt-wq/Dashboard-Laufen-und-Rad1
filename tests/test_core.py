@@ -1,6 +1,7 @@
 """Kernlogik-Tests (ohne Netzwerk):  python -m unittest discover -s tests -v   (aus dem Projektordner)"""
 import datetime as dt
 import os
+from contextlib import closing
 import tempfile
 import unittest
 
@@ -15,7 +16,7 @@ db.init()
 
 
 def reset():
-    with db.conn() as c:
+    with closing(db.conn()) as c:
         for t in ("activities", "streams", "z2", "performances", "health_daily", "plan_sessions", "kv", "sync_log"):
             c.execute(f"DELETE FROM {t}")
         c.commit()

@@ -44,8 +44,8 @@ def sport_of(strava_type: str) -> str:
 
 # ---------------------------------------------------------------- OAuth
 
-def authorize_url() -> str:
-    q = {"client_id": config.STRAVA_CLIENT_ID, "response_type": "code", "approval_prompt": "auto",
+def authorize_url(state: str) -> str:
+    q = {"client_id": config.STRAVA_CLIENT_ID, "response_type": "code", "approval_prompt": "auto", "state": state,
          "redirect_uri": f"{config.BASE_URL}/auth/strava/callback", "scope": "read,activity:read_all,profile:read_all"}
     return f"{OAUTH}/authorize?{urlencode(q)}"
 

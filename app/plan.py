@@ -1,5 +1,6 @@
 """Trainingsplan: Datenmodell, Abgleich mit tatsächlichen Aktivitäten, Bearbeitung (UI und MCP)."""
 import datetime as dt
+from contextlib import closing
 
 from . import db
 from .util import parse_date, today
@@ -76,7 +77,7 @@ def replace_range(date_from: str, date_to: str, sessions: list[dict]) -> dict:
         c.setdefault("status", "planned")
         cleaned.append(c)
     removed = db.one("SELECT COUNT(*) AS n FROM plan_sessions WHERE date BETWEEN ? AND ?", (d0.isoformat(), d1.isoformat()))["n"]
-    with db.conn() as c:                       # eine Transaktion: alles oder nichts
+    with closing(db.conn()) as c:              # eine Transaktion: alles oder nichts (Fehler -> Rollback)
         c.execute("DELETE FROM plan_sessions WHERE date BETWEEN ? AND ?", (d0.isoformat(), d1.isoformat()))
         for f in cleaned:
             cols = list(f) + ["updated_at"]

@@ -8,7 +8,10 @@ import contextlib
 import datetime as dt
 import logging
 import secrets
+import time
+from collections import deque
 from pathlib import Path
+from urllib.parse import urlparse
 
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
@@ -90,12 +93,19 @@ async def api_sync(request: Request):
 async def strava_login(request: Request):
     if not strava.configured():
         return PlainTextResponse("STRAVA_CLIENT_ID und STRAVA_CLIENT_SECRET sind nicht gesetzt.", status_code=400)
-    return RedirectResponse(strava.authorize_url())
+    state = secrets.token_urlsafe(16)
+    db.set_kv("strava_oauth_state", {"state": state, "ts": time.time()})
+    return RedirectResponse(strava.authorize_url(state))
 
 
 async def strava_callback(request: Request):
     if request.query_params.get("error") or not request.query_params.get("code"):
         return PlainTextResponse("Strava-Autorisierung abgebrochen oder fehlgeschlagen.", status_code=400)
+    saved = db.get_kv("strava_oauth_state") or {}
+    db.set_kv("strava_oauth_state", {})                 # nur einmal verwendbar
+    if not saved.get("state") or not secrets.compare_digest(str(saved["state"]).encode(), request.query_params.get("state", "").encode()) \
+            or time.time() - saved.get("ts", 0) > 600:
+        return PlainTextResponse("Ungültiger oder abgelaufener Anmeldevorgang. Bitte /auth/strava erneut öffnen.", status_code=400)
     await threaded(strava.exchange_code, request.query_params["code"])
     asyncio.create_task(threaded(sync.run_sync, "strava"))
     return RedirectResponse("/")
@@ -129,7 +139,7 @@ async def _sync_loop():
 @contextlib.asynccontextmanager
 async def lifespan(app):
     db.init()
-    if config.SEED_PLAN and not db.get_kv("demo", False):
+    if config.SEED_PLAN:
         n = plan_seed.seed_if_empty()
         if n:
             log.info("Startplan mit %d Einheiten angelegt", n)
@@ -162,40 +172,122 @@ web = Starlette(
 
 # ---------------------------------------------------------------- Zugriffsschutz und Weiche
 
+MAX_FAILS, FAIL_WINDOW_S = 8, 600          # 8 falsche Anmeldungen je IP in 10 Minuten -> 10 Minuten Sperre
+_fails: dict[str, deque] = {}
+
+SECURITY_HEADERS = [
+    (b"x-content-type-options", b"nosniff"),
+    (b"x-frame-options", b"DENY"),
+    (b"referrer-policy", b"no-referrer"),
+    (b"permissions-policy", b"camera=(), microphone=(), geolocation=()"),
+    (b"content-security-policy", b"default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+                                 b"script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"),
+]
+
+
+def _client_ip(scope) -> str:
+    client = scope.get("client")
+    return client[0] if client else "unknown"
+
+
+def _lock_remaining(ip: str) -> int:
+    """Sekunden bis zum Ende der Sperre (0 = nicht gesperrt)."""
+    q = _fails.get(ip)
+    if not q:
+        return 0
+    now = time.monotonic()
+    while q and now - q[0] > FAIL_WINDOW_S:
+        q.popleft()
+    if not q:
+        _fails.pop(ip, None)
+        return 0
+    return int(FAIL_WINDOW_S - (now - q[0])) + 1 if len(q) >= MAX_FAILS else 0
+
+
+def _record_fail(ip: str) -> None:
+    if len(_fails) > 5000:                 # Speicher begrenzen
+        _fails.clear()
+    _fails.setdefault(ip, deque()).append(time.monotonic())
+
+
+def _eq(a: str, b: str) -> bool:
+    return secrets.compare_digest(a.encode(), b.encode())      # Bytes: auch Nicht-ASCII-Zeichen sind erlaubt
+
+
+def _check_basic(scope) -> tuple[bool, bool]:
+    """(Anmeldung korrekt, Anmeldeversuch vorhanden)"""
+    auth = dict(scope["headers"]).get(b"authorization", b"").decode("latin-1")
+    if not auth.lower().startswith("basic "):
+        return False, False
+    try:
+        user, _, pw = base64.b64decode(auth[6:], validate=True).decode("utf-8").partition(":")
+    except Exception:  # noqa: BLE001
+        return False, True
+    user_ok, pw_ok = _eq(user, config.DASH_USER), _eq(pw, config.DASH_PASSWORD)    # beide immer auswerten
+    return user_ok and pw_ok, True
+
+
+def _is_mcp_path(path: str) -> bool:
+    if not path.startswith("/mcp/"):
+        return False
+    return _eq(path[5:].rstrip("/"), config.MCP_SECRET)
+
+
+def _same_origin(scope) -> bool:
+    """Schreibende Browser-Anfragen müssen von der eigenen Seite kommen (Schutz vor CSRF bei Basic-Auth)."""
+    if scope["method"] in ("GET", "HEAD", "OPTIONS"):
+        return True
+    headers = dict(scope["headers"])
+    origin = headers.get(b"origin")
+    if not origin:
+        return True                        # Nicht-Browser-Clients senden keinen Origin
+    return urlparse(origin.decode("latin-1")).netloc == headers.get(b"host", b"").decode("latin-1")
+
+
 async def _send_text(send, status: int, text: str, headers: list | None = None):
     body = text.encode()
     await send({"type": "http.response.start", "status": status,
                 "headers": [(b"content-type", b"text/plain; charset=utf-8"), (b"content-length", str(len(body)).encode()),
-                            *(headers or [])]})
+                            *SECURITY_HEADERS, *(headers or [])]})
     await send({"type": "http.response.body", "body": body})
 
 
-def _basic_ok(scope) -> bool:
-    auth = dict(scope["headers"]).get(b"authorization", b"").decode()
-    if not auth.lower().startswith("basic "):
-        return False
-    try:
-        user, _, pw = base64.b64decode(auth[6:]).decode().partition(":")
-    except Exception:  # noqa: BLE001
-        return False
-    return secrets.compare_digest(user, config.DASH_USER) and secrets.compare_digest(pw, config.DASH_PASSWORD)
-
-
-MCP_PREFIX = f"/mcp/{config.MCP_SECRET}"
+def _with_security_headers(send, path: str):
+    async def wrapped(message):
+        if message["type"] == "http.response.start":
+            headers = list(message.get("headers", []))
+            present = {k.lower() for k, _ in headers}
+            headers += [h for h in SECURITY_HEADERS if h[0] not in present]
+            if path.startswith(("/api", "/auth")) or path == "/":
+                headers.append((b"cache-control", b"no-store"))
+            message = {**message, "headers": headers}
+        await send(message)
+    return wrapped
 
 
 async def app(scope, receive, send):
     if scope["type"] != "http":
         return await web(scope, receive, send)          # lifespan
     path = scope["path"]
-    if path == MCP_PREFIX or path == MCP_PREFIX + "/":
+    if _is_mcp_path(path):                               # Zugriff nur über das geheime Pfadsegment
         scope = {**scope, "path": "/mcp", "raw_path": b"/mcp"}
         return await mcp_app(scope, receive, send)
     if path == "/healthz":
         return await _send_text(send, 200, "ok")
     if path.startswith("/mcp"):
         return await _send_text(send, 404, "Not found")
-    if not _basic_ok(scope):
+    ip = _client_ip(scope)
+    wait = _lock_remaining(ip)
+    if wait:
+        return await _send_text(send, 429, "Zu viele fehlgeschlagene Anmeldungen. Bitte später erneut versuchen.",
+                                [(b"retry-after", str(wait).encode())])
+    ok, attempted = _check_basic(scope)
+    if not ok:
+        if attempted:
+            _record_fail(ip)
         return await _send_text(send, 401, "Anmeldung erforderlich",
                                 [(b"www-authenticate", b'Basic realm="Training Dashboard", charset="UTF-8"')])
-    return await web(scope, receive, send)
+    _fails.pop(ip, None)
+    if not _same_origin(scope):
+        return await _send_text(send, 403, "Anfrage von fremder Herkunft abgelehnt")
+    return await web(scope, receive, _with_security_headers(send, path))
